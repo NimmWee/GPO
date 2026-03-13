@@ -46,7 +46,7 @@ flowchart TB
     class main,app,dash uiClass;
     class alg,geo logicClass;
     class bridge transportClass;
-    class controller,telemetry external extClass;
+    class controller,telemetry extClass;
 ```
 
 ## 2. Что является ядром проекта
