@@ -48,7 +48,11 @@ export const POINT_TASKS = [
 export const DEFAULT_POINT_TASK = POINT_TASKS[0];
 export const CONTROLLER_MIN_SEGMENT = 0.12;
 export const CONTROLLER_LOOP_CLOSURE_EPS = 0.2;
-export const SAFE_POINT_MARGIN = 0.35;
+export const SAFE_POINT_MARGIN = 0.65;
+export const ROUTE_CLEARANCE_MARGIN = 0.55;
+const MAP_TRAVERSAL_MARGIN = 0.18;
+const GRID_PATH_STEP = 0.3;
+const COLLINEAR_EPS = 1e-4;
 
 const EPS = 1e-9;
 const ZONE_COLORS = [
@@ -90,6 +94,7 @@ const clampPointToMap = (point) => ({
 
 export const sanitizeRouteForController = (route, taskKey) => {
   const cleaned = [];
+  const minSegment = Math.max(CONTROLLER_MIN_SEGMENT, GRID_PATH_STEP * 0.55);
 
   for (const point of route) {
     const x = Number(point?.x);
@@ -97,9 +102,36 @@ export const sanitizeRouteForController = (route, taskKey) => {
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
 
     const candidate = { x, y };
-    if (!cleaned.length || dist(cleaned[cleaned.length - 1], candidate) >= CONTROLLER_MIN_SEGMENT) {
+    if (!cleaned.length || dist(cleaned[cleaned.length - 1], candidate) >= minSegment) {
       cleaned.push(candidate);
     }
+  }
+
+  if (cleaned.length > 2) {
+    const smoothed = [cleaned[0]];
+
+    for (let i = 1; i < cleaned.length - 1; i += 1) {
+      const prev = smoothed[smoothed.length - 1];
+      const current = cleaned[i];
+      const next = cleaned[i + 1];
+
+      const firstLeg = dist(prev, current);
+      const secondLeg = dist(current, next);
+      const direct = dist(prev, next);
+      const detour = firstLeg + secondLeg;
+      const cross = Math.abs(
+        (current.x - prev.x) * (next.y - current.y) -
+        (current.y - prev.y) * (next.x - current.x)
+      );
+
+      const almostStraight = cross <= 0.02 && detour - direct <= 0.08;
+      if (almostStraight) continue;
+      smoothed.push(current);
+    }
+
+    smoothed.push(cleaned[cleaned.length - 1]);
+    cleaned.length = 0;
+    cleaned.push(...smoothed);
   }
 
   if (
@@ -183,10 +215,41 @@ export const pointInPolygon = (point, polygon) => {
 export const pointInAnyPolygon = (point, polygons) =>
   polygons.some((polygon) => pointInPolygon(point, polygon.points));
 
+const pointAtSegment = (a, b, t) => ({
+  x: a.x + (b.x - a.x) * t,
+  y: a.y + (b.y - a.y) * t,
+});
+
+const distancePointToSegment = (point, a, b) =>
+  dist(point, getClosestPointOnSegment(point, a, b));
+
+const distancePointToPolygonEdges = (point, polygon) => {
+  if (polygon.length < 2) return Number.POSITIVE_INFINITY;
+
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < polygon.length; i += 1) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    best = Math.min(best, distancePointToSegment(point, a, b));
+  }
+
+  return best;
+};
+
+const isPointNearPolygon = (point, polygon, margin = 0) => {
+  if (pointInPolygon(point, polygon)) return true;
+  if (margin <= EPS) return false;
+  return distancePointToPolygonEdges(point, polygon) <= margin + EPS;
+};
+
+const findBlockingPolygon = (point, polygons, margin = 0) =>
+  polygons.find((polygon) => isPointNearPolygon(point, polygon.points, margin));
+
 const projectPointOutsidePolygon = (point, polygon, margin = SAFE_POINT_MARGIN) => {
   let bestBoundaryPoint = null;
   let bestCandidate = null;
   let bestDistance = Number.POSITIVE_INFINITY;
+  const targetMargin = margin + 0.08;
 
   for (let i = 0; i < polygon.length; i += 1) {
     const a = polygon[i];
@@ -209,11 +272,11 @@ const projectPointOutsidePolygon = (point, polygon, margin = SAFE_POINT_MARGIN) 
     const outsideCandidates = normals
       .map((normal) =>
         clampPointToMap({
-          x: boundaryPoint.x + normal.x * margin,
-          y: boundaryPoint.y + normal.y * margin,
+          x: boundaryPoint.x + normal.x * targetMargin,
+          y: boundaryPoint.y + normal.y * targetMargin,
         })
       )
-      .filter((candidate) => !pointInPolygon(candidate, polygon));
+      .filter((candidate) => !isPointNearPolygon(candidate, polygon, margin));
 
     if (!outsideCandidates.length) continue;
 
@@ -236,7 +299,7 @@ export const projectPointOutsidePolygons = (point, polygons, margin = SAFE_POINT
   let adjusted = false;
 
   for (let step = 0; step < polygons.length + 4; step += 1) {
-    const polygon = polygons.find((item) => pointInPolygon(current, item.points));
+    const polygon = findBlockingPolygon(current, polygons, margin);
     if (!polygon) break;
     current = projectPointOutsidePolygon(current, polygon.points, margin);
     adjusted = true;
@@ -248,38 +311,49 @@ export const projectPointOutsidePolygons = (point, polygons, margin = SAFE_POINT
   };
 };
 
-const isPolygonEdge = (a, b, polygon) =>
-  polygon.some((point, index) => {
-    const next = polygon[(index + 1) % polygon.length];
-    return (
-      (pointEquals(a, point) && pointEquals(b, next)) ||
-      (pointEquals(a, next) && pointEquals(b, point))
-    );
-  });
+const distanceBetweenSegments = (a, b, c, d) => {
+  if (segmentsIntersect(a, b, c, d)) return 0;
 
-const sharesEndpointWithEdge = (a, b, p, q) =>
-  pointEquals(a, p) ||
-  pointEquals(a, q) ||
-  pointEquals(b, p) ||
-  pointEquals(b, q);
+  return Math.min(
+    distancePointToSegment(a, c, d),
+    distancePointToSegment(b, c, d),
+    distancePointToSegment(c, a, b),
+    distancePointToSegment(d, a, b)
+  );
+};
 
-const segmentClear = (a, b, polygons) => {
-  if (pointEquals(a, b)) return true;
+const isInsideTraversableMap = (point, margin = MAP_TRAVERSAL_MARGIN) =>
+  point.x >= -HALF_WIDTH + margin &&
+  point.x <= HALF_WIDTH - margin &&
+  point.y >= -HALF_HEIGHT + margin &&
+  point.y <= HALF_HEIGHT - margin;
+
+const segmentClear = (a, b, polygons, margin = ROUTE_CLEARANCE_MARGIN) => {
+  if (!isInsideTraversableMap(a) || !isInsideTraversableMap(b)) return false;
+
+  if (pointEquals(a, b)) {
+    return !findBlockingPolygon(a, polygons, margin);
+  }
 
   for (const polygon of polygons) {
     const points = polygon.points;
-    const segmentIsEdge = isPolygonEdge(a, b, points);
-    const middle = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    if (
+      isPointNearPolygon(a, points, Math.max(0, margin - 0.03)) ||
+      isPointNearPolygon(b, points, Math.max(0, margin - 0.03))
+    ) {
+      return false;
+    }
 
-    if (!segmentIsEdge && pointInPolygon(middle, points)) return false;
+    for (const t of [0.25, 0.5, 0.75]) {
+      if (pointInPolygon(pointAtSegment(a, b, t), points)) return false;
+    }
 
     for (let i = 0; i < points.length; i += 1) {
       const p = points[i];
       const q = points[(i + 1) % points.length];
-      if (!segmentsIntersect(a, b, p, q)) continue;
-      if (segmentIsEdge && isPolygonEdge(a, b, [p, q])) continue;
-      if (sharesEndpointWithEdge(a, b, p, q)) continue;
-      return false;
+      if (distanceBetweenSegments(a, b, p, q) <= margin + EPS) {
+        return false;
+      }
     }
   }
 
@@ -290,7 +364,9 @@ const routeCrossesPolygon = (route, polygon) => {
   if (route.length < 2 || polygon.points.length < 3) return false;
 
   for (let i = 1; i < route.length; i += 1) {
-    if (!segmentClear(route[i - 1], route[i], [polygon])) return true;
+    if (!segmentClear(route[i - 1], route[i], [polygon], ROUTE_CLEARANCE_MARGIN)) {
+      return true;
+    }
   }
 
   return false;
@@ -299,62 +375,199 @@ const routeCrossesPolygon = (route, polygon) => {
 export const routeCrossesAnyLimitPolygon = (route, polygons) =>
   polygons.some((polygon) => routeCrossesPolygon(route, polygon));
 
-const findShortestVisiblePath = (start, end, polygons) => {
-  if (segmentClear(start, end, polygons)) return [copyPoint(start), copyPoint(end)];
+const buildGridIndex = (x, y, cols) => y * cols + x;
 
-  const nodes = [
-    { point: start },
-    { point: end },
-    ...polygons.flatMap((polygon) => polygon.points.map((point) => ({ point }))),
+const createTraversalGrid = (polygons, margin = ROUTE_CLEARANCE_MARGIN) => {
+  const originX = -HALF_WIDTH + MAP_TRAVERSAL_MARGIN;
+  const originY = -HALF_HEIGHT + MAP_TRAVERSAL_MARGIN;
+  const cols = Math.floor((MAP_WORLD_WIDTH - MAP_TRAVERSAL_MARGIN * 2) / GRID_PATH_STEP) + 1;
+  const rows = Math.floor((MAP_WORLD_HEIGHT - MAP_TRAVERSAL_MARGIN * 2) / GRID_PATH_STEP) + 1;
+  const points = Array(cols * rows);
+  const blocked = Array(cols * rows).fill(false);
+
+  for (let y = 0; y < rows; y += 1) {
+    for (let x = 0; x < cols; x += 1) {
+      const point = {
+        x: originX + x * GRID_PATH_STEP,
+        y: originY + y * GRID_PATH_STEP,
+      };
+      const index = buildGridIndex(x, y, cols);
+      points[index] = point;
+      blocked[index] =
+        !isInsideMap(point) ||
+        !isInsideTraversableMap(point) ||
+        Boolean(findBlockingPolygon(point, polygons, margin));
+    }
+  }
+
+  return { cols, rows, points, blocked };
+};
+
+const findNearestFreeGridCell = (point, grid, polygons, margin = ROUTE_CLEARANCE_MARGIN) => {
+  const { cols, rows, points, blocked } = grid;
+  const baseX = clampNumber(
+    Math.round((point.x - (-HALF_WIDTH + MAP_TRAVERSAL_MARGIN)) / GRID_PATH_STEP),
+    0,
+    cols - 1
+  );
+  const baseY = clampNumber(
+    Math.round((point.y - (-HALF_HEIGHT + MAP_TRAVERSAL_MARGIN)) / GRID_PATH_STEP),
+    0,
+    rows - 1
+  );
+
+  let bestIndex = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let radius = 0; radius <= 12; radius += 1) {
+    for (let y = Math.max(0, baseY - radius); y <= Math.min(rows - 1, baseY + radius); y += 1) {
+      for (let x = Math.max(0, baseX - radius); x <= Math.min(cols - 1, baseX + radius); x += 1) {
+        const index = buildGridIndex(x, y, cols);
+        if (blocked[index]) continue;
+
+        const candidate = points[index];
+        if (!segmentClear(point, candidate, polygons, margin)) continue;
+
+        const candidateDistance = dist(point, candidate);
+        if (candidateDistance < bestDistance) {
+          bestDistance = candidateDistance;
+          bestIndex = index;
+        }
+      }
+    }
+
+    if (bestIndex >= 0) return bestIndex;
+  }
+
+  return -1;
+};
+
+const simplifyPathByVisibility = (path, polygons, margin = ROUTE_CLEARANCE_MARGIN) => {
+  if (path.length <= 2) return path.map(copyPoint);
+
+  const simplified = [copyPoint(path[0])];
+  let anchor = 0;
+
+  while (anchor < path.length - 1) {
+    let next = path.length - 1;
+    while (next > anchor + 1 && !segmentClear(path[anchor], path[next], polygons, margin)) {
+      next -= 1;
+    }
+    simplified.push(copyPoint(path[next]));
+    anchor = next;
+  }
+
+  return simplified;
+};
+
+const simplifyCollinearPath = (path) => {
+  if (path.length <= 2) return path.map(copyPoint);
+
+  const simplified = [copyPoint(path[0])];
+
+  for (let i = 1; i < path.length - 1; i += 1) {
+    const prev = simplified[simplified.length - 1];
+    const current = path[i];
+    const next = path[i + 1];
+
+    const ax = current.x - prev.x;
+    const ay = current.y - prev.y;
+    const bx = next.x - current.x;
+    const by = next.y - current.y;
+    const cross = Math.abs(ax * by - ay * bx);
+
+    if (cross <= COLLINEAR_EPS) continue;
+    simplified.push(copyPoint(current));
+  }
+
+  simplified.push(copyPoint(path[path.length - 1]));
+  return simplified;
+};
+
+const findShortestSafePath = (start, end, polygons, margin = ROUTE_CLEARANCE_MARGIN) => {
+  if (segmentClear(start, end, polygons, margin)) {
+    return [copyPoint(start), copyPoint(end)];
+  }
+
+  const grid = createTraversalGrid(polygons, margin);
+  const startIndex = findNearestFreeGridCell(start, grid, polygons, margin);
+  const endIndex = findNearestFreeGridCell(end, grid, polygons, margin);
+
+  if (startIndex < 0 || endIndex < 0) return null;
+  if (startIndex === endIndex) {
+    const anchor = grid.points[startIndex];
+    const candidate = [copyPoint(start), copyPoint(anchor), copyPoint(end)];
+    return simplifyPathByVisibility(candidate, polygons, margin);
+  }
+
+  const { cols, rows, points, blocked } = grid;
+  const total = points.length;
+  const open = new Set([startIndex]);
+  const closed = Array(total).fill(false);
+  const gScore = Array(total).fill(Number.POSITIVE_INFINITY);
+  const fScore = Array(total).fill(Number.POSITIVE_INFINITY);
+  const previous = Array(total).fill(-1);
+
+  gScore[startIndex] = 0;
+  fScore[startIndex] = dist(points[startIndex], points[endIndex]);
+
+  const directions = [
+    [-1, -1], [0, -1], [1, -1],
+    [-1, 0],            [1, 0],
+    [-1, 1],  [0, 1],   [1, 1],
   ];
-  const n = nodes.length;
-  const graph = Array.from({ length: n }, () => []);
 
-  for (let i = 0; i < n; i += 1) {
-    for (let j = i + 1; j < n; j += 1) {
-      if (!segmentClear(nodes[i].point, nodes[j].point, polygons)) continue;
-      const weight = dist(nodes[i].point, nodes[j].point);
-      graph[i].push({ to: j, weight });
-      graph[j].push({ to: i, weight });
-    }
-  }
-
-  const distances = Array(n).fill(Number.POSITIVE_INFINITY);
-  const previous = Array(n).fill(-1);
-  const visited = Array(n).fill(false);
-  distances[0] = 0;
-
-  for (let step = 0; step < n; step += 1) {
+  while (open.size) {
     let current = -1;
-    let bestDistance = Number.POSITIVE_INFINITY;
+    let bestF = Number.POSITIVE_INFINITY;
 
-    for (let i = 0; i < n; i += 1) {
-      if (!visited[i] && distances[i] < bestDistance) {
-        bestDistance = distances[i];
-        current = i;
+    for (const index of open) {
+      if (fScore[index] < bestF) {
+        bestF = fScore[index];
+        current = index;
       }
     }
 
-    if (current < 0 || current === 1) break;
-    visited[current] = true;
+    if (current < 0) break;
+    if (current === endIndex) break;
 
-    for (const edge of graph[current]) {
-      const candidate = distances[current] + edge.weight;
-      if (candidate + EPS < distances[edge.to]) {
-        distances[edge.to] = candidate;
-        previous[edge.to] = current;
-      }
+    open.delete(current);
+    closed[current] = true;
+
+    const currentX = current % cols;
+    const currentY = Math.floor(current / cols);
+
+    for (const [dx, dy] of directions) {
+      const nextX = currentX + dx;
+      const nextY = currentY + dy;
+      if (nextX < 0 || nextX >= cols || nextY < 0 || nextY >= rows) continue;
+
+      const nextIndex = buildGridIndex(nextX, nextY, cols);
+      if (closed[nextIndex] || blocked[nextIndex]) continue;
+
+      const fromPoint = points[current];
+      const toPoint = points[nextIndex];
+      if (!segmentClear(fromPoint, toPoint, polygons, margin)) continue;
+
+      const tentative = gScore[current] + dist(fromPoint, toPoint);
+      if (tentative + EPS >= gScore[nextIndex]) continue;
+
+      previous[nextIndex] = current;
+      gScore[nextIndex] = tentative;
+      fScore[nextIndex] = tentative + dist(toPoint, points[endIndex]);
+      open.add(nextIndex);
     }
   }
 
-  if (!Number.isFinite(distances[1])) return null;
+  if (!Number.isFinite(gScore[endIndex])) return null;
 
   const path = [];
-  for (let current = 1; current !== -1; current = previous[current]) {
-    path.push(copyPoint(nodes[current].point));
+  for (let current = endIndex; current !== -1; current = previous[current]) {
+    path.push(copyPoint(points[current]));
   }
 
-  return path.reverse();
+  const rawPath = [copyPoint(start), ...path.reverse(), copyPoint(end)];
+  return simplifyCollinearPath(simplifyPathByVisibility(rawPath, polygons, margin));
 };
 
 export const buildObstacleAwareRoute = (route, polygons) => {
@@ -362,14 +575,14 @@ export const buildObstacleAwareRoute = (route, polygons) => {
 
   const result = [];
   for (let i = 0; i < route.length - 1; i += 1) {
-    const path = findShortestVisiblePath(route[i], route[i + 1], polygons);
+    const path = findShortestSafePath(route[i], route[i + 1], polygons, ROUTE_CLEARANCE_MARGIN);
     if (!path) return null;
 
     if (!result.length) result.push(...path);
     else result.push(...path.slice(1));
   }
 
-  return result;
+  return simplifyCollinearPath(result);
 };
 
 export const drawDiamond = (ctx, x, y, radius) => {

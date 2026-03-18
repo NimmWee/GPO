@@ -15,6 +15,8 @@ import {
   POINT_KIND_META,
   POINT_KIND_OPTIONS,
   POINT_TASKS,
+  ROUTE_CLEARANCE_MARGIN,
+  SAFE_POINT_MARGIN,
   buildObstacleAwareRoute,
   canvasToWorld,
   dist,
@@ -771,16 +773,21 @@ export default function Dashboard() {
     sendPayload(ws);
   };
 
-  const cardCls = "rounded-2xl bg-white/90 backdrop-blur border border-stone-200 shadow-sm p-4";
-  const inputCls = "w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm";
-  const selectCls = "w-full rounded-xl border border-stone-200 bg-white px-3 py-2 text-sm";
-  const rowCls = "flex items-center justify-between gap-3 px-3 py-2 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 cursor-pointer";
-  const zonePanelCardCls = "rounded-[26px] bg-white/96 backdrop-blur border border-sky-100 shadow-[0_18px_50px_rgba(125,211,252,0.18)] p-4";
-  const zoneCardBaseCls = "rounded-2xl border p-3 bg-white shadow-sm";
+  const cardCls = "rounded-2xl bg-white/95 backdrop-blur border border-stone-200 shadow-[0_18px_40px_rgba(15,23,42,0.06)] p-4";
+  const inputCls = "w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100";
+  const selectCls = "w-full rounded-xl border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100";
+  const rowCls = "flex items-center justify-between gap-3 px-3 py-2 rounded-xl border border-stone-300 bg-white shadow-sm hover:bg-stone-50 hover:border-stone-400 cursor-pointer transition";
+  const zonePanelCardCls = "rounded-[26px] bg-white/97 backdrop-blur border border-sky-100 shadow-[0_18px_50px_rgba(125,211,252,0.18)] p-4";
+  const zoneCardBaseCls = "rounded-2xl border p-3 bg-white shadow-[0_10px_24px_rgba(15,23,42,0.06)]";
+  const subtleButtonCls = "rounded-xl border border-stone-300 bg-stone-100 px-3 py-2 text-sm font-semibold text-stone-800 shadow-sm transition hover:bg-stone-200 hover:border-stone-400";
+  const neutralButtonCls = "rounded-xl border border-slate-300 bg-slate-800 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-900";
+  const zonePrimaryButtonCls = "rounded-md border border-sky-300 bg-sky-100 px-2.5 py-1.5 text-[11px] font-semibold text-sky-800 shadow-sm transition hover:bg-sky-200";
+  const zoneNeutralButtonCls = "rounded-md border border-stone-300 bg-stone-100 px-2.5 py-1.5 text-[11px] font-semibold text-stone-800 shadow-sm transition hover:bg-stone-200";
+  const zoneDangerButtonCls = "rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-[11px] font-semibold text-rose-700 shadow-sm transition hover:bg-rose-100";
 
   return (
     <div className="flex h-screen bg-stone-100 text-stone-900">
-      <aside className="w-[360px] p-5 overflow-auto border-r border-stone-200 bg-gradient-to-b from-stone-50 via-slate-50 to-stone-100 space-y-4">
+      <aside className="w-[360px] p-5 overflow-auto border-r border-stone-200 bg-gradient-to-b from-stone-100 via-white to-slate-100 space-y-4">
         <div className={cardCls}>
           <div className="text-[11px] uppercase tracking-[0.22em] text-stone-500 mb-2">Старая карта</div>
           <h2 className="text-2xl font-bold leading-tight">Маршрутный планировщик на координатной сетке</h2>
@@ -816,10 +823,10 @@ export default function Dashboard() {
             })}
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <button onClick={() => clearPoints("visit")} className="rounded-xl border border-stone-200 bg-white px-3 py-2 hover:bg-stone-50">
+            <button onClick={() => clearPoints("visit")} className={subtleButtonCls}>
               Очистить маршрутные
             </button>
-            <button onClick={() => clearPoints("limit")} className="rounded-xl border border-stone-200 bg-white px-3 py-2 hover:bg-stone-50">
+            <button onClick={() => clearPoints("limit")} className={subtleButtonCls}>
               Очистить зоны
             </button>
           </div>
@@ -874,13 +881,16 @@ export default function Dashboard() {
         </div>
 
         <div className={cardCls}>
+          <div className="mb-3 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-xs text-teal-800">
+            РњР°СЂС€СЂСѓС‚ СЃС‚СЂРѕРёС‚СЃСЏ СЃ Р·Р°Р·РѕСЂРѕРј {ROUTE_CLEARANCE_MARGIN.toFixed(2)} Рј РѕС‚ РєРѕРЅС‚СѓСЂР°, Р° С†РµР»РµРІС‹Рµ С‚РѕС‡РєРё РґРµСЂР¶Р°С‚СЃСЏ РјРёРЅРёРјСѓРј РЅР° {SAFE_POINT_MARGIN.toFixed(2)} Рј РѕС‚ Р·Р°РїСЂРµС‚РЅРѕР№ Р·РѕРЅС‹.
+          </div>
           <button onClick={optimizeRoute} className="w-full h-11 rounded-xl bg-orange-600 text-white font-semibold hover:bg-orange-700 transition">
             Построить маршрут
           </button>
           <button onClick={sendRoute} className="mt-2 w-full h-11 rounded-xl bg-emerald-600 text-white font-semibold hover:bg-emerald-700 transition">
             Отправить маршрут
           </button>
-          <button onClick={() => clearPoints()} className="mt-2 w-full h-11 rounded-xl border border-stone-200 bg-white font-semibold hover:bg-stone-50 transition">
+          <button onClick={() => clearPoints()} className={`mt-2 w-full h-11 ${neutralButtonCls}`}>
             Очистить всё
           </button>
           {optimizedRoute.length > 0 && (
@@ -949,7 +959,7 @@ export default function Dashboard() {
               <h3 className="text-sm font-semibold text-slate-900">Ограничивающие зоны</h3>
               <div className="mt-1 text-xs text-slate-500">Светлая панель управления контурами и их статусами</div>
             </div>
-            <button onClick={createZone} className="rounded-xl bg-sky-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-sky-700">
+            <button onClick={createZone} className="rounded-xl bg-sky-700 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-sky-800">
               Новая зона
             </button>
           </div>
@@ -962,7 +972,7 @@ export default function Dashboard() {
                   className={`${zoneCardBaseCls} ${active ? "border-sky-300 bg-gradient-to-br from-sky-50 to-white" : "border-sky-100 bg-white"}`}
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <button className="flex-1 text-left min-w-0" onClick={() => {
+                    <button className="flex-1 min-w-0 rounded-xl px-2 py-1 text-left transition hover:bg-sky-50" onClick={() => {
                       setActiveLimitZoneId(zone.id);
                       setActivePointKind("limit");
                     }}>
@@ -982,13 +992,13 @@ export default function Dashboard() {
                     </button>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                      <button onClick={() => toggleZoneClosed(zone.id)} className="rounded-md border border-sky-200 px-2 py-1 text-[11px] text-sky-700 hover:bg-sky-50">
+                      <button onClick={() => toggleZoneClosed(zone.id)} className={zonePrimaryButtonCls}>
                         {zone.closed ? "Открыть" : "Замкнуть"}
                       </button>
-                      <button onClick={() => clearZone(zone.id)} className="rounded-md border border-stone-200 px-2 py-1 text-[11px] hover:bg-stone-50">
+                      <button onClick={() => clearZone(zone.id)} className={zoneNeutralButtonCls}>
                         Очистить
                       </button>
-                      <button onClick={() => removeZone(zone.id)} className="rounded-md border border-red-200 px-2 py-1 text-[11px] text-red-600 hover:bg-red-50">
+                      <button onClick={() => removeZone(zone.id)} className={zoneDangerButtonCls}>
                         Удалить
                       </button>
                   </div>
